@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
+<title>Eating Analyzer — Face & Bite Coach</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root{
+  --bg:#0b0c10; --panel:#12141a; --muted:#9aa3b8; --text:#e6e8ee; --accent:#60a5fa;
+  --good:#34d399; --warn:#fbbf24; --bad:#ef4444; --panel2:#0f1220; --line:#28304a;
+}
+*{box-sizing:border-box} html,body{height:100%}
+body{margin:0;background:#0b0c10;color:var(--text);font-family:Inter,system-ui,Segoe UI,Roboto,sans-serif}
+header{padding:12px 16px;font-weight:800;letter-spacing:.2px;position:sticky;top:0;background:#0b0c10;z-index:10}
+.wrap{max-width:1100px;margin:0 auto;padding:10px;display:grid;gap:10px}
+.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:10px}
+@media (max-width:900px){ .grid{grid-template-columns:1fr} }
+.card{background:var(--panel);border:1px solid #1d2130;border-radius:16px;padding:10px;box-shadow:0 10px 24px rgba(0,0,0,.2)}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+button{background:#0f1425;color:var(--text);border:1px solid #2b3453;padding:12px 14px;border-radius:12px;cursor:pointer;font-weight:700;touch-action:manipulation}
+button:active{transform:scale(.98)}
+.btn-primary{background:#0f2245;border-color:#3b5bcc}
+.small{font-size:12px;color:var(--muted)}
+.videoWrap{position:relative;border-radius:12px;overflow:hidden}
+video,canvas{display:block;width:100%;height:auto;touch-action:none}
+.hud{position:absolute;left:8px;bottom:8px;right:8px;display:flex;gap:8px;flex-wrap:wrap;background:rgba(5,8,14,.55);
+  backdrop-filter:blur(6px);border:1px solid #2a2e40;padding:6px 8px;border-radius:12px;font-size:13px}
+.pill{padding:4px 8px;border-radius:999px;background:#0f1220;border:1px solid #28304a}
+.status{font-weight:900}
+.status.go{color:var(--good)} .status.pause{color:var(--warn)} .status.stop{color:var(--bad)}
+.overlayPrompt{position:absolute;top:10px;left:10px;right:10px;display:flex;justify-content:center}
+.prompt{background:#111827d9;border:1px solid #1f2937;color:#e5e7eb;padding:10px 12px;border-radius:12px;font-weight:700;max-width:90%;text-align:center}
+.meter{height:10px;background:#101425;border:1px solid #28304a;border-radius:999px;overflow:hidden}
+.meter>span{display:block;height:100%;background:var(--accent);width:0%}
+.score{font-size:32px;font-weight:900}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kv > div{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px}
+.kv h4{margin:0 0 6px 0;font-size:12px;color:#b8c1d9;letter-spacing:.2px}
+.val{font-weight:800}
+.badge{font-size:11px;color:#cbd5e1;background:#0f1220;border:1px solid #28304a;border-radius:999px;padding:2px 8px}
+</style>
+</head>
+<body>
+<header>Eating Analyzer — Face & Bite Coach</header>
+<div class="wrap">
+  <div class="grid">
+    <div class="card">
+      <div class="controls">
+        <button id="startBtn" class="btn-primary">Start</button>
+        <button id="pauseBtn">Pause</button>
+        <button id="resetBtn">Reset</button>
+        <label class="small"><input id="rearCam" type="checkbox"/> Use rear camera (phone)</label>
+        <span class="small">Tip: sit ~arm’s length away, face centered.</span>
+      </div>
+
+      <div class="videoWrap">
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="overlayPrompt"><div id="prompt" class="prompt" style="display:none"></div></div>
+        <div class="hud">
+          <div class="pill">State: <span id="state" class="status stop">Idle</span></div>
+          <div class="pill">Bites: <span id="biteCount">0</span></div>
+          <div class="pill">Chew rate: <span id="chewRate">0</span>/s</div>
+          <div class="pill">Pace: <span id="pace">0</span> bpm</div>
+          <div class="pill">FPS: <span id="fps">0</span></div>
+        </div>
+      </div>
+
+      <div class="kv" style="margin-top:8px">
+        <div><h4>Total time</h4><div class="val" id="totTime">0:00</div></div>
+        <div><h4>Avg bite size</h4><div class="val" id="avgSize">—</div></div>
+        <div><h4>Avg chew per bite</h4><div class="val" id="avgChews">—</div></div>
+        <div><h4>Idle (no chewing) %</h4><div class="val" id="idlePct">0%</div></div>
+      </div>
+      <div style="margin-top:8px">
+        <div class="score" id="overallScore">—</div>
+        <div class="meter"><span id="scoreBar"></span></div>
+        <div class="small" style="margin-top:6px">Tough grading: fast, mindful bites with moderate size, consistent chewing, minimal mouth-open time.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:6px 0 8px 0">Charts</h3>
+      <canvas id="chartBites" height="160"></canvas>
+      <canvas id="chartChew" height="160" style="margin-top:10px"></canvas>
+      <canvas id="chartSize" height="160" style="margin-top:10px"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+(async function(){
+  // Elements
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('overlay');
+  const ctx = canvas.getContext('2d',{ willReadFrequently:true });
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const rearCam = document.getElementById('rearCam');
+  const stateEl = document.getElementById('state');
+  const biteEl = document.getElementById('biteCount');
+  const chewRateEl = document.getElementById('chewRate');
+  const paceEl = document.getElementById('pace');
+  const fpsEl = document.getElementById('fps');
+  const totTimeEl = document.getElementById('totTime');
+  const avgSizeEl = document.getElementById('avgSize');
+  const avgChewsEl = document.getElementById('avgChews');
+  const idlePctEl = document.getElementById('idlePct');
+  const overallScoreEl = document.getElementById('overallScore');
+  const scoreBar = document.getElementById('scoreBar');
+
+  function setState(txt, cls){ stateEl.textContent=txt; stateEl.className='status '+cls; }
+
+  // Timing
+  let running=false, paused=false, startTime=0, totalElapsed=0;
+  let lastHandsTs=0, idleMs=0;
+  let lastFrameTime=performance.now(), fpsAvg=0;
+
+  // Charts
+  const cBites = new Chart(document.getElementById('chartBites').getContext('2d'), {
+    type:'line', data:{ labels:[], datasets:[{label:'Bites (cumulative)', data:[], fill:false, tension:0.15}]},
+    options:{animation:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}}}
+  });
+  const cChew = new Chart(document.getElementById('chartChew').getContext('2d'), {
+    type:'line', data:{ labels:[], datasets:[{label:'Chew rate (/s)', data:[], fill:false, tension:0.15}]},
+    options:{animation:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,suggestedMax:2.5}}}
+  });
+  const cSize = new Chart(document.getElementById('chartSize').getContext('2d'), {
+    type:'bar', data:{ labels:[], datasets:[{label:'Bite size (score)', data:[]}]},
+    options:{animation:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,suggestedMax:100}}}
+  });
+
+  // FaceMesh
+  const faceMesh = new FaceMesh({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+  faceMesh.setOptions({ maxNumFaces:1, refineLandmarks:true, minDetectionConfidence:0.6, minTrackingConfidence:0.6 });
+  faceMesh.onResults(onResults);
+
+  let stream;
+  async function startCam(){
+    const facingMode = rearCam.checked ? { exact: "environment" } : "user";
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode, width:{ideal:1280}, height:{ideal:720} }, audio:false });
+    video.srcObject = stream;
+    await video.play();
+    video.requestVideoFrameCallback(tick);
+  }
+
+  // Helpers
+  const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+  const dist=(a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
+
+  // Mouth metrics (MAR) using FaceMesh landmarks
+  // Horizontal: inner mouth corners 61 (left), 291 (right)
+  // Vertical: inner lips 13 (upper), 14 (lower)
+  function mouthMetrics(lms){
+    const L = lms[61], R = lms[291], U = lms[13], D = lms[14];
+    if (!L || !R || !U || !D) return null;
+    const h = dist(L,R);
+    const v = dist(U,D);
+    const mar = v / Math.max(1e-6,h);
+    // Jaw proxy: chin (152) to nose (1)
+    const jaw = dist(lms[152], lms[1]);
+    return { mar, h, v, jaw };
+  }
+
+  // State for bite detection
+  let baselineMAR=null, openThr=null, closeThr=null, marPeak=0;
+  let chewingWindow=[]; // recent MARs for chew rate
+  let mouthROI=null; // bbox around lips for motion energy
+  let prevMouthFrame=null;
+  let bites=0, lastBiteTime=0, chewRates=[], biteSizes=[];
+
+  function calibrateBaseline(mar){
+    // Running median-ish baseline
+    if (baselineMAR==null){ baselineMAR=mar; }
+    baselineMAR = 0.95*baselineMAR + 0.05*mar;
+    openThr  = baselineMAR + 0.12;  // open mouth threshold
+    closeThr = baselineMAR + 0.04;  // near-closed threshold
+  }
+
+  function mouthBBox(lms){
+    const idxs=[61,291,13,14,0,17,78,308];
+    let minX=1,minY=1,maxX=0,maxY=0;
+    for(const i of idxs){ const p=lms[i]; if(!p) continue; minX=Math.min(minX,p.x); minY=Math.min(minY,p.y); maxX=Math.max(maxX,p.x); maxY=Math.max(maxY,p.y); }
+    // pad box
+    const padX = (maxX-minX)*0.3, padY=(maxY-minY)*0.5;
+    return {x:minX-padX,y:minY-padY,w:(maxX-minX)+2*padX,h:(maxY-minY)+2*padY};
+  }
+
+  // Bite FSM
+  const STATE = { IDLE:0, OPEN:1, CLOSING:2, CHEWING:3 };
+  let biteState = STATE.IDLE;
+  let chewStart=0, chewsThisBite=0, motionEnergy=0;
+
+  function onResults(res){
+    // Draw camera
+    canvas.width = res.image.width;
+    canvas.height = res.image.height;
+    ctx.drawImage(res.image,0,0,canvas.width,canvas.height);
+
+    const lms = res.multiFaceLandmarks && res.multiFaceLandmarks[0];
+    const now = performance.now();
+
+    if (!lms){
+      // No face
+      updateStats(now, null, 0);
+      return;
+    }
+
+    drawConnectors(ctx, lms, FACEMESH_LIPS, {lineWidth:1.5});
+
+    const mm = mouthMetrics(lms);
+    if (!mm){ updateStats(now, null, 0); return; }
+
+    // Establish a pixel-space mouth ROI for motion energy
+    const bb = mouthBBox(lms);
+    mouthROI = {
+      x: Math.round(bb.x*canvas.width),
+      y: Math.round(bb.y*canvas.height),
+      w: Math.round(bb.w*canvas.width),
+      h: Math.round(bb.h*canvas.height)
+    };
+    // Clamp ROI to canvas
+    mouthROI.x = Math.max(0, Math.min(canvas.width-1, mouthROI.x));
+    mouthROI.y = Math.max(0, Math.min(canvas.height-1, mouthROI.y));
+    mouthROI.w = Math.max(1, Math.min(canvas.width-mouthROI.x, mouthROI.w));
+    mouthROI.h = Math.max(1, Math.min(canvas.height-mouthROI.y, mouthROI.h));
+
+    // Calibrate baseline while idle (closed-ish mouth)
+    calibrateBaseline(mm.mar);
+
+    // Draw ROI
+    ctx.save();
+    ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 1;
+    ctx.strokeRect(mouthROI.x, mouthROI.y, mouthROI.w, mouthROI.h);
+    ctx.restore();
+
+    // Motion energy in mouth ROI (frame differencing)
+    let mEnergy = 0;
+    try{
+      const frame = ctx.getImageData(mouthROI.x, mouthROI.y, mouthROI.w, mouthROI.h);
+      if (prevMouthFrame && prevMouthFrame.data && prevMouthFrame.data.length === frame.data.length){
+        for (let i=0;i<frame.data.length;i+=4){
+          const dr = frame.data[i]-prevMouthFrame.data[i];
+          const dg = frame.data[i+1]-prevMouthFrame.data[i+1];
+          const db = frame.data[i+2]-prevMouthFrame.data[i+2];
+          mEnergy += Math.abs(dr)+Math.abs(dg)+Math.abs(db);
+        }
+      }
+      prevMouthFrame = frame;
+    }catch(e){}
+
+    // Update FSM for bite detection
+    switch(biteState){
+      case STATE.IDLE:
+        if (mm.mar > openThr){
+          biteState = STATE.OPEN;
+          marPeak = mm.mar;
+        }
+        break;
+      case STATE.OPEN:
+        marPeak = Math.max(marPeak, mm.mar);
+        if (mm.mar < closeThr){
+          biteState = STATE.CLOSING;
+          chewStart = now;
+          chewsThisBite = 0;
+          motionEnergy = 0;
+        }
+        break;
+      case STATE.CLOSING:
+        // wait briefly then enter chewing
+        if (now - chewStart > 200){ // 0.2s
+          biteState = STATE.CHEWING;
+        }
+        break;
+      case STATE.CHEWING:
+        // Accumulate motion energy near mouth (for size estimate)
+        motionEnergy += mEnergy / (mouthROI.w*mouthROI.h);
+        // Chew cycles: detect MAR small oscillations (0.7–2.0 Hz typical)
+        chewingWindow.push({t:now, mar:mm.mar});
+        // prune >5s window
+        while (chewingWindow.length && now - chewingWindow[0].t > 5000) chewingWindow.shift();
+        // Simple zero-crossing of derivative
+        if (chewingWindow.length >= 3){
+          const a = chewingWindow[chewingWindow.length-3].mar;
+          const b = chewingWindow[chewingWindow.length-2].mar;
+          const c = chewingWindow[chewingWindow.length-1].mar;
+          const d1 = b-a, d2 = c-b;
+          if (Math.sign(d1) !== Math.sign(d2) && Math.abs(d1-d2) > 0.01){
+            chewsThisBite++;
+          }
+        }
+        // Finish chewing window if mouth opens big again or after 6s
+        if (mm.mar > openThr || now - chewStart > 6000){
+          // Register bite
+          bites++;
+          biteEl.textContent = String(bites);
+          lastBiteTime = now;
+          // Estimate bite size
+          const amp = Math.max(0, marPeak - baselineMAR); // mouth open amplitude
+          const sizeScore = clamp( (amp*220) + (motionEnergy*0.02), 0, 100); // heuristic scale
+          biteSizes.push(sizeScore);
+          cSize.data.labels.push('Bite '+bites);
+          cSize.data.datasets[0].data.push(Math.round(sizeScore));
+          cSize.update('none');
+          // Chew rate estimate for this bite
+          const chewDuration = Math.max(1, (now - chewStart)/1000);
+          const rate = chewsThisBite / chewDuration;
+          chewRates.push(rate);
+          // Reset
+          chewingWindow.length = 0;
+          biteState = STATE.IDLE;
+        }
+        break;
+    }
+
+    // Pace & chew stats (rolling)
+    const t = new Date().toLocaleTimeString();
+    cBites.data.labels.push(t);
+    cBites.data.datasets[0].data.push(bites);
+    if (cBites.data.labels.length>60){ cBites.data.labels.shift(); cBites.data.datasets[0].data.shift(); }
+    cBites.update('none');
+
+    const curRate = chewRates.length ? chewRates[chewRates.length-1] : 0;
+    cChew.data.labels.push(t);
+    cChew.data.datasets[0].data.push(curRate);
+    if (cChew.data.labels.length>60){ cChew.data.labels.shift(); cChew.data.datasets[0].data.shift(); }
+    cChew.update('none');
+
+    updateStats(now, mm, curRate);
+  }
+
+  function updateStats(now, mm, curRate){
+    // FPS
+    const dt = now - lastFrameTime; lastFrameTime=now;
+    const fps = 1000/dt; fpsAvg = fpsAvg*0.9 + fps*0.1; fpsEl.textContent = String(Math.round(fpsAvg||0));
+
+    // Timer
+    let cur = totalElapsed; if (running && !paused) cur += now - startTime;
+    totTimeEl.textContent = fmt(cur);
+
+    // Idle (no chewing): mouth near baseline
+    if (running && !paused && mm){
+      if (mm.mar < (baselineMAR? baselineMAR+0.02 : 0.1)) idleMs += dt;
+    }
+    idlePctEl.textContent = Math.round((cur? idleMs/cur : 0)*100)+'%';
+
+    // Chew rate & pace
+    chewRateEl.textContent = (curRate||0).toFixed(2);
+    const minutes = Math.max(1/60, cur/60000);
+    paceEl.textContent = (bites/minutes).toFixed(1); // bites per minute
+
+    // Averages
+    if (biteSizes.length){
+      const m = biteSizes.reduce((a,b)=>a+b,0)/biteSizes.length;
+      avgSizeEl.textContent = Math.round(m)+' / 100';
+      const mc = chewRates.reduce((a,b)=>a+b,0)/chewRates.length;
+      avgChewsEl.textContent = mc.toFixed(2)+'/s';
+    }
+
+    // Compute tough overall score
+    // Components: pace (not too fast, not too slow), bite size moderation, chew consistency, idle discipline
+    const paceIdeal = 8; // bites per min ideal-ish
+    const paceScore = 100 - Math.min(100, Math.abs((bites/minutes) - paceIdeal) * 7); // penalize deviation
+    const sizeMean = biteSizes.length ? (biteSizes.reduce((a,b)=>a+b,0)/biteSizes.length) : 50;
+    const sizeScore = 100 - Math.min(100, Math.abs(sizeMean - 55) * 2); // punish too small/large
+    const chewMean = chewRates.length ? (chewRates.reduce((a,b)=>a+b,0)/chewRates.length) : 1.2;
+    const chewScore = clamp( (chewMean>=0.8 && chewMean<=1.8) ? 90 - Math.abs(chewMean-1.3)*50 : 60 - Math.abs(chewMean-1.3)*80, 0, 100);
+    const idleScore = 100 - Math.min(60, (cur? (idleMs/cur):0)*300); // more idle = worse
+
+    const overall = Math.round(0.30*paceScore + 0.30*sizeScore + 0.25*chewScore + 0.15*idleScore);
+    overallScoreEl.textContent = overall;
+    scoreBar.style.width = overall+'%';
+  }
+
+  async function tick(now, meta){
+    if (running && !paused){
+      await faceMesh.send({ image: video });
+    }
+    video.requestVideoFrameCallback(tick);
+  }
+
+  function fmt(ms){ const s=Math.floor(ms/1000); const m=Math.floor(s/60); const r=s%60; return m+':'+String(r).padStart(2,'0'); }
+
+  // UI
+  startBtn.onclick = async ()=>{
+    if (!stream) await startCam();
+    if (!running){ running=true; paused=false; startTime=performance.now(); setState('Running','go'); }
+  };
+  pauseBtn.onclick = ()=>{
+    if (!running) return;
+    paused = !paused;
+    if (paused){ totalElapsed += performance.now()-startTime; setState('Paused','pause'); }
+    else { startTime = performance.now(); setState('Running','go'); }
+  };
+  resetBtn.onclick = ()=>{
+    running=false; paused=false; setState('Idle','stop');
+    totalElapsed=0; idleMs=0; baselineMAR=null; openThr=null; closeThr=null; marPeak=0;
+    chewingWindow.length=0; bites=0; chewRates.length=0; biteSizes.length=0;
+    biteEl.textContent='0'; chewRateEl.textContent='0'; paceEl.textContent='0';
+    overallScoreEl.textContent='—'; scoreBar.style.width='0%';
+    cBites.data.labels=[]; cBites.data.datasets[0].data=[]; cBites.update();
+    cChew.data.labels=[]; cChew.data.datasets[0].data=[]; cChew.update();
+    cSize.data.labels=[]; cSize.data.datasets[0].data=[]; cSize.update();
+    totTimeEl.textContent='0:00'; avgSizeEl.textContent='—'; avgChewsEl.textContent='—'; idlePctEl.textContent='0%';
+  };
+
+  // Privacy: no auto-start
+})();
+</script>
+</body>
+</html>
